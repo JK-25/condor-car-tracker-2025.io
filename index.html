@@ -1,0 +1,223 @@
+\
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Трекер машин — клиент + сервер</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; background:#0f172a; color:#e5e7eb; padding:18px;}
+    .card { background:#0b1220; padding:14px; border-radius:12px; border:1px solid rgba(255,255,255,.06); margin-bottom:12px; }
+    .row { display:flex; gap:8px; align-items:center; }
+    input, select, textarea { padding:8px; border-radius:8px; background:#111827; color:#e5e7eb; border:1px solid rgba(255,255,255,.06); }
+    .btn { padding:8px 12px; border-radius:8px; cursor:pointer; background:#2563eb; color:white; border:none; }
+    .btn.ghost { background:transparent; border:1px solid rgba(255,255,255,.06); }
+    .muted { color:#9ca3af; font-size:13px; }
+    #resetBtn { display:none; background:#ef4444; }
+  </style>
+</head>
+<body>
+  <div style="max-width:1100px;margin:0 auto;">
+    <h1>Трекер машин (серверный режим)</h1>
+    <div class="card">
+      <div class="row" style="justify-content:space-between;">
+        <div>
+          <div class="muted">Адрес сервера:</div>
+          <div><input id="serverUrl" value="http://localhost:5000" style="width:320px;" /></div>
+        </div>
+        <div>
+          <div class="muted">Путь для сохранения (сервер):</div>
+          <div class="row">
+            <input id="savePath" placeholder="Например: D:\logs\tracker" style="width:380px;" />
+            <button id="setPathBtn" class="btn">Установить путь</button>
+            <button id="statusBtn" class="btn btn.ghost">Статус</button>
+          </div>
+          <div id="statusOut" class="muted" style="margin-top:6px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="gap:12px;">
+        <div style="flex:1;">
+          <label class="muted">Машина</label><br/>
+          <select id="vehicleSelect" style="width:100%;"></select>
+        </div>
+        <div style="flex:1;">
+          <label class="muted">Направление</label><br/>
+          <input id="direction" />
+        </div>
+        <div style="flex:2;">
+          <label class="muted">Маршрут / описание</label><br/>
+          <input id="route" />
+        </div>
+        <div style="width:170px;">
+          <label class="muted">&nbsp;</label><br/>
+          <div class="row">
+            <button id="dispatchBtn" class="btn">Отправить</button>
+            <button id="addVehicleBtn" class="btn">＋</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Сейчас в рейсе</h3>
+      <div id="activeList" class="muted">Загрузка...</div>
+    </div>
+
+    <div class="card">
+      <h3>Журнал</h3>
+      <div style="margin-bottom:8px;">
+        <button id="exportCsvBtn" class="btn">Скачать CSV</button>
+        <button id="refreshBtn" class="btn btn.ghost">Обновить</button>
+        <button id="resetBtn" class="btn" title="Полный сброс (Alt+C)">СБРОС</button>
+      </div>
+      <pre id="logOut" style="max-height:320px; overflow:auto;" class="muted"></pre>
+    </div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+function apiFetch(server, path, opts){
+  const url = server.replace(/\/$/, '') + path;
+  return fetch(url, Object.assign({
+    headers: {'Content-Type':'application/json'}
+  }, opts)).then(async r=>{
+    try { const j = await r.json(); if(!r.ok) throw j; return j; } catch(e){
+      if(r.ok) return null;
+      throw e;
+    }
+  });
+}
+
+async function loadVehicles(){
+  const server = $('serverUrl').value;
+  try {
+    const v = await apiFetch(server, '/api/vehicles');
+    const sel = $('vehicleSelect');
+    sel.innerHTML = '';
+    if(v && v.length){
+        v.forEach(x=>{
+          const o = document.createElement('option'); o.value=o.textContent=x; sel.appendChild(o);
+        });
+    } else {
+        const o = document.createElement('option'); o.value=''; o.textContent='(список пуст)'; sel.appendChild(o);
+    }
+  } catch(e){ alert('Не могу получить список машин: ' + JSON.stringify(e)); }
+}
+
+async function loadLogs(){
+  const server = $('serverUrl').value;
+  try {
+    const logs = await apiFetch(server, '/api/logs');
+    const active = logs ? logs.filter(x => x.status === 'В рейсе') : [];
+    const aout = $('activeList');
+    if(!logs) {
+      aout.textContent = 'Не удалось загрузить данные';
+      $('logOut').textContent = '';
+      return;
+    }
+    if(active.length === 0) aout.textContent = 'Нет активных рейсов.';
+    else {
+      aout.innerHTML = '';
+      active.forEach(r=>{
+        const d = document.createElement('div');
+        d.style.borderBottom = '1px solid rgba(255,255,255,0.06)';
+        d.style.padding = '8px 0';
+        d.innerHTML = `<b>${r.vehicle}</b> → ${r.direction} (выезд: ${r.departAt}) 
+          <button data-id="${r.id}" class="btnReturn btn">В гараже</button>
+          <div style="opacity:.8">${r.route || ''}</div>`;
+        aout.appendChild(d);
+      });
+      document.querySelectorAll('.btnReturn').forEach(b=>{
+        b.addEventListener('click', async ()=> {
+          try {
+            await apiFetch(server, '/api/return', { method:'POST', body: JSON.stringify({ id: b.dataset.id }) });
+            await loadLogs(); await loadVehicles();
+          } catch(err){ alert('Ошибка возврата: '+ JSON.stringify(err)); }
+        });
+      });
+    }
+    $('logOut').textContent = JSON.stringify(logs.slice().reverse(), null, 2);
+  } catch(e){
+    $('activeList').textContent = 'Ошибка при загрузке журнала: ' + (e&&e.error? e.error : JSON.stringify(e));
+    $('logOut').textContent = '';
+  }
+}
+
+$('dispatchBtn').addEventListener('click', async ()=>{
+  const server = $('serverUrl').value;
+  const vehicle = $('vehicleSelect').value;
+  const direction = $('direction').value;
+  const route = $('route').value;
+  try {
+    await apiFetch(server, '/api/dispatch', { method:'POST', body: JSON.stringify({ vehicle, direction, route }) });
+    $('direction').value=''; $('route').value='';
+    await loadLogs();
+  } catch(e){ alert('Ошибка отправки в рейс: ' + JSON.stringify(e)); }
+});
+
+$('addVehicleBtn').addEventListener('click', async ()=>{
+  const name = prompt('Название/номер машины');
+  if(!name) return;
+  const server = $('serverUrl').value;
+  try {
+    await apiFetch(server, '/api/vehicles', { method:'POST', body: JSON.stringify({ name }) });
+    await loadVehicles();
+  } catch(e){ alert('Ошибка добавления: ' + JSON.stringify(e)); }
+});
+
+$('setPathBtn').addEventListener('click', async ()=>{
+  const server = $('serverUrl').value;
+  const path = $('savePath').value;
+  if(!path) return alert('Укажите абсолютный путь, например D:\\\\logs\\\\tracker');
+  try {
+    const res = await apiFetch(server, '/api/set_path', { method:'POST', body: JSON.stringify({ path }) });
+    $('statusOut').textContent = 'Путь установлен: ' + res.path;
+  } catch(e){ alert('Ошибка установки пути: ' + JSON.stringify(e)); }
+});
+
+$('statusBtn').addEventListener('click', async ()=>{
+  const server = $('serverUrl').value;
+  try {
+    const s = await fetch(server.replace(/\/$/,'') + '/api/status').then(r=>r.json());
+    $('statusOut').textContent = 'Статус: ' + JSON.stringify(s);
+  } catch(e){ $('statusOut').textContent = 'Не удалось связаться с сервером'; }
+});
+
+$('exportCsvBtn').addEventListener('click', ()=>{
+  const server = $('serverUrl').value;
+  const url = server.replace(/\/$/,'') + '/api/export_csv';
+  window.open(url, '_blank');
+});
+
+$('refreshBtn').addEventListener('click', ()=>{
+  loadVehicles(); loadLogs();
+});
+
+// hidden reset button activation with Alt+C
+document.addEventListener('keydown', function(e) {
+  if (e.altKey && e.code === 'KeyC') {
+    const btn = $('resetBtn');
+    if (btn.style.display === 'none' || !btn.style.display) btn.style.display = 'inline-block';
+    else btn.style.display = 'none';
+  }
+});
+
+// reset action with confirmation
+$('resetBtn').addEventListener('click', async ()=>{
+  if(!confirm('Вы уверены? Это полностью удалит все данные и настройки.')) return;
+  const server = $('serverUrl').value;
+  try {
+    await apiFetch(server, '/api/reset', { method:'POST' });
+    alert('Полный сброс выполнен. Перезагрузите страницу.');
+    loadVehicles(); loadLogs();
+  } catch(e){ alert('Ошибка сброса: ' + JSON.stringify(e)); }
+});
+
+// initial load
+loadVehicles(); loadLogs();
+</script>
+</body>
+</html>
